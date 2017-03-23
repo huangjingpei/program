@@ -1,0 +1,22 @@
+[user]
+	name = jphuang
+	email = jphuang@grandstream.com
+[diff]
+    tool = bc3
+[difftool]
+    prompt = false
+[merge]
+    tool = bc3
+[mergetool]
+    prompt = false
+[alias]
+	diffall = diffall-org --copy-back
+	co = checkout
+[difftool "bcompare"]
+    cmd = bcompare "$LOCAL" "$REMOTE"
+[color]
+	ui = auto
+[commit]
+	template = /home/jphuang/CommitTemplate
+[core]
+	editor = vim
