@@ -6,16 +6,20 @@
 #include "/home/jphuang/myprojects/GVC3200/avs_mcu/avs_mcu/avs/contrib/include/libavutil/frame.h"
 
 
-const char* SRC_FILE = "1080p.h264";
-
-int main()
+int main(int argc, char **argv)
 {
-	FILE *yuv_file = fopen("yuv_file","ab");
-	if (!yuv_file)
+	if (argc != 2) {
+		printf("This tool is used to add the length for per frame and write to the given file.");
+		printf("Usage:%s H264 file.\n", argv[0]);
+		return 0;
+	}
+	int align_size = 0;
+	FILE *fpOut = fopen("out.data","ab");
+	if (!fpOut)
 	  return 0;
 	av_register_all();
 	AVFormatContext* pFormat = NULL;
-	if (avformat_open_input(&pFormat, SRC_FILE, NULL, NULL) < 0)
+	if (avformat_open_input(&pFormat, argv[1], NULL, NULL) < 0)
 	{
 		return 0;
 	}
@@ -25,7 +29,7 @@ int main()
 	{
 		return 0;
 	}
-	av_dump_format(pFormat,0,SRC_FILE,0);
+	av_dump_format(pFormat,0,argv[1],0);
 	printf("nb_streams %d\n", pFormat->nb_streams);
 	video_dec_ctx = pFormat->streams[0]->codec;
 	video_dec = avcodec_find_decoder(video_dec_ctx->codec_id);
@@ -33,17 +37,21 @@ int main()
 	{
 		return 0;
 	}
+	printf("begin ...\n");
 	AVPacket *pkt = av_packet_alloc();
 	av_init_packet(pkt);
 	while (1)
 	{
 		if (av_read_frame(pFormat, pkt) < 0)
 		{
-			fclose(yuv_file);
+			fclose(fpOut);
 			av_packet_free(&pkt);
 			return 0;
 		}
-		printf("pkt size %d\n", pkt->size);
+		align_size = (pkt->size + 3) & (~0x3);
+		fwrite(&pkt->size, 1, 4, fpOut);
+		fwrite(pkt->data, 1, align_size, fpOut);
+		printf("pkt size %d flag %d\n", pkt->size, pkt->flags);
 		if (pkt->stream_index == 0)
 		{
 			AVFrame *pFrame = av_frame_alloc();
@@ -77,7 +85,7 @@ int main()
 //					memcpy(buf + a, pFrame->data[2] + i * pFrame->linesize[2], width / 2);
 //					a += width / 2;
 //				}
-//				fwrite(buf, 1, video_dec_ctx->height * video_dec_ctx->width * 3 / 2, yuv_file);
+//				fwrite(buf, 1, video_dec_ctx->height * video_dec_ctx->width * 3 / 2, fpOut);
 //				delete buf;
 //				buf = NULL;
 //			}
