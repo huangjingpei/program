@@ -1,0 +1,6 @@
+1>
+sudo apt-get install ntfsprogs
+
+2>
+sudo ntfsfix /dev/sdc1
+
