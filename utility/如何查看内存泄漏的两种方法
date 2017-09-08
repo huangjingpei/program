@@ -1,0 +1,70 @@
+第一种：
+valgrind --tool=memcheck --log-file=leak.log --leak-check=full ./rtp
+
+打印直接泄漏、间接泄漏（一级指针没有释放，导致二级malloc指针也没有释放）、释放后仍然可以访问的地址（free后没有设置为NULL）
+
+第二种：使用mtrace 函数
+mtrace是类似malloc_hook的 malloc handler，trace的handler function已由系统为你写好，调用mtrace()前要先设置 MALLOC_TRACE环境变量：
+setenv("MALLOC_TRACE", "output_file_name", 1);
+检测结果的格式是一般人无法理解的，而只要有安装mtrace的话，就会有一名为mtrace的Perl script，在shell输入以下指令：
+mtrace [binary] output_file_name
+注意：mtrace的原理是记录每一对malloc-free的执行，若每一个malloc都有相应的free，则代表没有内存泄露，对于任何非malloc/free情況下所发生的内存泄露问题，mtrace并不能找出来。
+第三种：
+值得注意的是：要在每一个.C文件里面添加，而且必须添加在所包含的头文件最后一行！
+
+编译使用的CFLAGS: -DDMALLOC -DDMALLOC_FUNC_CHECK
+
+如： gcc -DDMALLOC -DDMALLOC_FUNC_CHECK (-ldmalloc) dm_test.c
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#ifdef DMALLOC
+#include <dmalloc.h>
+#endif
+int main(int argc, char **argv)
+{
+
+  char *string;
+  string = malloc(sizeof（char）);
+  string = malloc(sizeof(int*));
+  return 0;
+
+}
+
+Dmalloc的局限性：
+1．dmalloc只能检测堆上内存，对栈内存和静态内存无能为力。
+2. dmalloc只用于利用malloc申请的内存，对使用sbrk()或mmap()分配的内存无能为力。
+3. dmalloc不能用于检测读写没有申请的或者没有初始化的内存，也不能检测写只读内存。
+
+第四种：
+和其他的内存访问错误所不同的是，它并不会造成崩溃，即使是强大的 valgrind 也无法告诉我们具体问题在哪里。而在最新版本的 llvm和gcc中有一款工具却可以发现这种错误，它就是Address Sanitizer (ASan) ，它可以直接在编译的时候进行使用。
+
+不过要注意的是，在使用前我们需要在编译器标志中增加一个参数-fsanitize=address。另外，为了使调试更为轻松，我们还需要增加 -ggdb.
+
+gcc -fsanitize=address -ggdb -o test test.c
+
+使用Address Sanitizer进行软件开发
+
+我们在进行模糊测试时，通常对象不会是一个简单的C文件，因此我们必须要把address sanitizer添加到编译器的标志寄存器中。而软件所使用的正常配置脚本则如下所示：
+
+./configure --disable-shared CFLAGS="-fsanitize=address -ggdb" CXXFLAGS="-fsanitize=address -ggdb"
+make
+
+为了获得更多的调试信息，我们需要再一次的添加-ggdb。如果可能的话我们还可以禁用共享库并设置C和C++编译器的标志。
+
+然后，我们就可以像第一部分所说的那样对运行中的软件进行畸形输入了。而当我们将输出重定向到日志文件时，我们就不得不考虑到我们不能够对分段错误进行grep，而是需要我们去grep  Address Sanitizer的消息：
+
+grep AddressSanitizer fuzzing.log
+
+在使用Address Sanitizer时，我们还必须要考虑到一些事：
+
+1、ASan发现内存访问违规的时，应用程序并不会自动崩溃。这是由于在使用模糊测试工具时，它们通常都是通过检查返回码来检测这种错误。当然，我们也可以在模糊测试进行之前通过将环境变量 ASAN_OPTIONS修改成如下形式来迫使软件崩溃：
+
+export ASAN_OPTIONS='abort_on_error=1'/
+
+2、 ASan需要相当大的虚拟内存（大约20TB），不用担心，这个只是虚拟内存，你仍可以使用你的应用程序。但像 american fuzzy lop这样的模糊测试工具就会对模糊化的软件使用内存进行限制，不过你仍可以通过禁用内存限制来解决该问题。唯一需要注意的就是，这会带来一些风险：测试样本可能会导致应用程序分配大量的内存进而导致系统不稳定或者其他应用程序崩溃。因此在进行一些重要的模糊测试时，不要去尝试在同一个系统上禁用内存限制。
+
+3、 Zzuf目前并不能和 ASan协同工作， 但你仍可以使用zzuf手动去创建一些测试样本将他们输入ASan的编译软件中。
+
+4、还有就是，ASan会显著的延缓执行，其所发现的bug往往没有那么严重（当然也有例外），不过它能发现更多的bug是毋庸置疑的。
