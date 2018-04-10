@@ -69,24 +69,27 @@ class BitReader():
         return (golomb+1) / 2
 
 class Assembler():
-    def __init__(self,outfilename,logger):
+    def __init__(self,outfilename,logger, red):
         self.logger = logger
         self.outfilename = outfilename
         self.fdout = open(outfilename,'w')
+        self.red = red
 
         self.logger.info('open %s ok!',outfilename)
 
     def __del__(self):
         self.fdout.close()
         print '%s output finish!'%self.outfilename
+    def setSubPt(self, pt_sub):
+        self.pt_sub = pt_sub
 
     def packetAssemble(self,rtp):
         print "Assembler.packetAssemble()"  
         pass 
 
 class H264Assembler(Assembler):
-    def __init__(self,outfilename,logger):
-        Assembler.__init__(self,outfilename,logger)
+    def __init__(self,outfilename,logger,red):
+        Assembler.__init__(self,outfilename,logger,red)
         self.skipcnt = 0
         self.firstkeyframe = 0
         self.nalhead=0x00000001
@@ -94,6 +97,7 @@ class H264Assembler(Assembler):
         self.height = 0
         self.profile = ''
         self.levelid = 0
+        self.GDR = 0
 
 
     # reference doc https://en.wikipedia.org/wiki/H.264/MPEG-4_AVC
@@ -175,7 +179,7 @@ class H264Assembler(Assembler):
       bitdata = BitReader(data)
       subWidthC = [1, 2, 2, 1]
       subHeightC = [1, 2, 1, 1]
-      chroma_format_idc = 0
+      chroma_format_idc = 1
       crop_left = 0
       crop_right = 0
       crop_top = 0
@@ -264,11 +268,18 @@ class H264Assembler(Assembler):
       pixel_height = (pic_height_in_map_units_minus1+1)*16 - crop_top - crop_bottom
 
       return (pixel_width, pixel_height, self.profile_idc_int_to_str(int(profile_idc)),level_idc )
-
+    
     def packetAssemble(self,rtp):
-        F=(ord(rtp.data[0])>>7)&0x1
-        NRI=(ord(rtp.data[0])>>5)&0x3
-        TYPE=ord(rtp.data[0])&0x1F
+        red_offset = 1 if self.red else 0
+
+        if self.red and self.pt_sub != 255:
+            _pt_sub=(ord(rtp.data[0])&0x7F)
+            if self.pt_sub != _pt_sub:
+                return
+
+        F=(ord(rtp.data[red_offset+0])>>7)&0x1
+        NRI=(ord(rtp.data[red_offset+0])>>5)&0x3
+        TYPE=ord(rtp.data[red_offset+0])&0x1F
 
         '''
         filename='%sto%s.h264'%(srcipaddr,dstipaddr)
@@ -281,28 +292,30 @@ class H264Assembler(Assembler):
         #print F,NRI, TYPE
 
         if TYPE==28:#FU-A
-          S=(ord(rtp.data[1])>>7)&0x1
-          E=(ord(rtp.data[1])>>6)&0x1
-          R=(ord(rtp.data[1])>>5)&0x1
-          NALTYPE=(ord(rtp.data[0]) & 0xe0) | (ord(rtp.data[1] )& 0x1f)
+          S=(ord(rtp.data[red_offset+1])>>7)&0x1
+          E=(ord(rtp.data[red_offset+1])>>6)&0x1
+          R=(ord(rtp.data[red_offset+1])>>5)&0x1
+          NALTYPE=(ord(rtp.data[red_offset+0]) & 0xe0) | (ord(rtp.data[red_offset+1] )& 0x1f)
+          if self.GDR < 4 and NALTYPE == 97:
+              self.GDR = self.GDR + 1
          # print S,E,R,hex(NALTYPE)
           if S == 1:
              if self.firstkeyframe == 1:
                  self.fdout.write(struct.pack('!I',self.nalhead))
                  self.fdout.write(struct.pack('B',int(NALTYPE)))
-                 self.fdout.write(rtp.data[2:])
-                 #print binascii.b2a_hex(rtp.data[:10])
+                 self.fdout.write(rtp.data[red_offset+2:])
+                 #print binascii.b2a_hex(rtp.data[red_offset:10])
                  #print "start nal pack"
           elif E == 1:
              #print "end nal pack"
              if self.firstkeyframe == 1:
-                 self.fdout.write(rtp.data[2:])
+                 self.fdout.write(rtp.data[red_offset+2:])
           else:
             if self.firstkeyframe == 1:
-                self.fdout.write(rtp.data[2:])
+                self.fdout.write(rtp.data[red_offset+2:])
 
         elif TYPE == 24: #STAP-A
-            datalen = len(rtp.data)
+            datalen = len(rtp.data) - red_offset 
             #print 'stap-a len:%d-------------'%datalen
 
             datalen = datalen - 1
@@ -310,35 +323,55 @@ class H264Assembler(Assembler):
             offset = 1
             while datalen >= 2:
 
-                nalSize = (ord(rtp.data[offset]) << 8) | ord(rtp.data[offset+1]);
+                nalSize = (ord(rtp.data[red_offset+offset]) << 8) | ord(rtp.data[red_offset+offset+1]);
                 #print 'nalSize len:%d %d '%(nalSize,datalen,)
                 if datalen < nalSize + 2 :
                     print 'Discarding malformed STAP-A packet'
                     break;
 
-                if ord(rtp.data[offset+2])&0x1F == 7:
+                if ord(rtp.data[red_offset+offset+2])&0x1F == 7:
                    self.firstkeyframe = 1
 
                 if self.firstkeyframe == 1:
                     self.fdout.write(struct.pack('!I',self.nalhead))
-                    self.fdout.write(rtp.data[offset+2:offset+2+nalSize])
-                #print binascii.b2a_hex(rtp.data[offset+2:offset+2+1])
+                    self.fdout.write(rtp.data[red_offset+offset+2:red_offset+offset+2+nalSize])
+                #print binascii.b2a_hex(rtp.data[red_offset+offset+2:red_offset+offset+2+1])
+
+                if ord(rtp.data[red_offset+offset+2])&0x1F == 7:
+                    spsDataIO = StringIO.StringIO(rtp.data[red_offset+offset+3:])
+                    try:
+                        ( _w, _h, _profile,_levelid) = self.read_sequence_paramter_set(spsDataIO)
+                        if _w != self.width or _h != self.height or _profile != self.profile or _levelid != self.levelid:
+                            print "video resolution:%dx%d %s %d" % (_w,_h,_profile,_levelid) 
+                            self.width = _w
+                            self.height = _h
+                            self.profile = _profile
+                            self.levelid = _levelid
+                    except e:
+                        print e
 
                 offset += 2 + nalSize;
                 datalen -= 2 + nalSize;
 
         elif TYPE >= 1 and TYPE <= 23:
+            #print TYPE
+            NALTYPE=(ord(rtp.data[red_offset+0]) )
+            #print NALTYPE
+            if self.GDR < 4 and NALTYPE == 97:
+              self.GDR = self.GDR + 1
+            #print hex(NALTYPE)
             if TYPE == 7 :
               self.firstkeyframe = 1
+              #print 'keyframe'
 
             if self.firstkeyframe == 1:
-              #print hex(ord(rtp.data[0]) )
+              #print hex(ord(rtp.data[red_offset+0]) )
               self.fdout.write(struct.pack('!I',self.nalhead))
-              #print binascii.b2a_hex(rtp.data[0:1])
-              self.fdout.write(rtp.data)
+              #print binascii.b2a_hex(rtp.data[red_offset+0:1])
+              self.fdout.write(rtp.data[red_offset:])
 
             if TYPE==7:
-                spsDataIO = StringIO.StringIO(rtp.data[1:])
+                spsDataIO = StringIO.StringIO(rtp.data[red_offset+1:])
                 try:
                     ( _w, _h, _profile,_levelid) = self.read_sequence_paramter_set(spsDataIO)
                     if _w != self.width or _h != self.height or _profile != self.profile or _levelid != self.levelid:
@@ -352,8 +385,8 @@ class H264Assembler(Assembler):
 
 
 class VP8Assembler(Assembler):
-    def __init__(self, outfilename,logger):
-        Assembler.__init__(self,outfilename,logger)
+    def __init__(self, outfilename,logger,red):
+        Assembler.__init__(self,outfilename,logger,red)
         self.skipcnt = 0
         self.firstkeyframe = 0
         self.frameSz=0
@@ -414,11 +447,16 @@ class VP8Assembler(Assembler):
     def packetAssemble(self, rtp):       
         #print '%s to %s F:%d NRI:%d type:%d '%(srcipaddr,dstipaddr,F,NRI,TYPE)
         #filename='%sto%s.ivf'%(srcipaddr,dstipaddr)
+        red_offset = 1 if self.red else 0
+        if self.red and self.pt_sub != 255:
+            _pt_sub=(ord(rtp.data[0])&0x7F)
+            if self.pt_sub != _pt_sub:
+                return
 
         offset=0;
-        X=(ord(rtp.data[0])&0x80)
-        S=(ord(rtp.data[0])&0x10)
-        PartID=(ord(rtp.data[0])&0xF)
+        X=(ord(rtp.data[red_offset+0])&0x80)
+        S=(ord(rtp.data[red_offset+0])&0x10)
+        PartID=(ord(rtp.data[red_offset+0])&0xF)
         offset+=1
 
         if PartID > 8 :
@@ -426,17 +464,17 @@ class VP8Assembler(Assembler):
             return
 
         if X:
-            I=(ord(rtp.data[1])&0x80)
-            L=(ord(rtp.data[1])&0x40)
-            T=(ord(rtp.data[1])&0x20)
-            K=(ord(rtp.data[1])&0x10)
+            I=(ord(rtp.data[red_offset+1])&0x80)
+            L=(ord(rtp.data[red_offset+1])&0x40)
+            T=(ord(rtp.data[red_offset+1])&0x20)
+            K=(ord(rtp.data[red_offset+1])&0x10)
             offset+=1
             #print I,L,T,K
             if I:
-                pictureId=(ord(rtp.data[2])&0x7F)
+                pictureId=(ord(rtp.data[red_offset+2])&0x7F)
                 offset+=1
-                if ord(rtp.data[2]) & 0x80 :
-                    pictureId=(pictureId<<8)+ord(rtp.data[3])
+                if ord(rtp.data[red_offset+2]) & 0x80 :
+                    pictureId=(pictureId<<8)+ord(rtp.data[red_offset+3])
                     offset+=1
                 #print 'pictureId %d'%pictureId
             if L:
@@ -448,7 +486,7 @@ class VP8Assembler(Assembler):
         if S and self.firstFrame : #begin of partition
             self.firstFrame = False
             self.framecnt+=1;
-            (pixel_width, pixel_height) = self.parse_payload_header(rtp.data[offset:])
+            (pixel_width, pixel_height) = self.parse_payload_header(rtp.data[red_offset+offset:])
             if pixel_width > 0 and pixel_height > 0 and (self.pixel_width != pixel_width  or self.pixel_height != pixel_height):
                 self.pixel_width = pixel_width  
                 self.pixel_height = pixel_height
@@ -458,14 +496,14 @@ class VP8Assembler(Assembler):
             self.frameSz = 0;
             self.unFinishLen = 0;
             self.framecnt+=1;
-            (pixel_width, pixel_height) =  self.parse_payload_header(rtp.data[offset:])
+            (pixel_width, pixel_height) =  self.parse_payload_header(rtp.data[red_offset+offset:])
             if pixel_width > 0 and pixel_height > 0 and (self.pixel_width != pixel_width  or self.pixel_height != pixel_height):
                 self.pixel_width = pixel_width  
                 self.pixel_height = pixel_height
                 print "vp8 resolution:%dx%d" % (pixel_width, pixel_height)
             #print 'new seek pos %d'%seekPos
 
-        self.packetSz=len(rtp.data) - offset
+        self.packetSz=len(rtp.data) - offset - red_offset
         self.frameSz += self.packetSz                        
         self.fdout.seek(self.seekPos)
         #print 'seekPos %d'%self.seekPos
@@ -477,7 +515,7 @@ class VP8Assembler(Assembler):
         self.fdout.seek(self.unFinishLen+12+self.seekPos);
         self.unFinishLen +=self.packetSz;
 
-        self.fdout.write(rtp.data[offset:])
+        self.fdout.write(rtp.data[red_offset+offset:])
 
         pos=self.fdout.tell();
         #print "rtp.ts  %d"%rtp.ts
@@ -509,38 +547,40 @@ def usage():
     -o output file name"
     -c codec name h264 or vp8"
     -p payload type"
+    -r redundant packet (1:red  0:nored(default) 
+    -s sub payload type
     '''
     return 
 
 def loginit ():
     logger = logging.getLogger(__name__)
-    logger.setLevel(logging.INFO)
+    #logger.setLevel(logging.INFO)
 
     logoutfile = 'videoAssemble.log'
-    fh = TimedRotatingFileHandler(logoutfile,when='M',interval=1,backupCount=30)
+    #fh = TimedRotatingFileHandler(logoutfile,when='M',interval=1,backupCount=30)
     #fh = logging.handlers.RotatingFileHandler(logoutfile,maxBytes=1024*1024,backupCount=40)
      
     # create a file handler
      
-    handler = logging.FileHandler(logoutfile)
-    handler.setLevel(logging.INFO)
+    #handler = logging.FileHandler(logoutfile)
+    #handler.setLevel(logging.INFO)
      
     # create a logging format
      
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    handler.setFormatter(formatter)
+    #formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    #handler.setFormatter(formatter)
      
     # add the handlers to the logger
      
     #logger.addHandler(handler)
-    logger.addHandler(fh)
+    #logger.addHandler(fh)
      
     return logger
 
 def main():
     logger = loginit()
 
-    shortargs = 'hi:o:c:p:'
+    shortargs = 'hi:o:c:p:r:s:'
     opts, args = getopt.getopt( sys.argv[1:], shortargs )
     if args:
         print '-h for detail'
@@ -551,7 +591,8 @@ def main():
     outfilename = ''
     codec=''
     pt=255
-
+    red = 0
+    pt_sub=255 #for red payload pt
     for opt,val in opts:
         if opt in ( '-h'):
            usage()
@@ -568,6 +609,12 @@ def main():
         if opt in ( '-p' ):
            pt = int(val) &0x7F
            continue
+        if opt in ( '-r' ):
+           red = int(val) &0x1
+           continue
+        if opt in ( '-s' ):
+           pt_sub = int(val) &0x7f
+           continue
   
     if infilename == '' or outfilename == '' or ((pt >=64 and pt <96) or pt == 255 ) or (codec not in ['h264', 'vp8']):
         print 'infilename=%s outfilename=%s codec=%s pt=%d has invalid parameter!!'%(infilename,outfilename,codec,pt)
@@ -579,11 +626,14 @@ def main():
 
     ptlist = []
     if codec == 'h264':
-        assember = H264Assembler(outfilename,logger)
+        assember = H264Assembler(outfilename,logger,red)
     elif codec == 'vp8':
-        assember = VP8Assembler(outfilename,logger)
-
-
+        assember = VP8Assembler(outfilename,logger,red)
+    assember.setSubPt(pt_sub)
+    udplist = {}
+    NumBuffersReceived = 0
+    mHighestSeqNumber = 0
+    _rtplist = []
     for ts, buf in pcap:
         #print len(buf)
         if pcap.dloff == 14:
@@ -620,28 +670,100 @@ def main():
 
                 if rtp.pt == pt :#and '192.168.122.154' == srcipaddr:
                     #print rtp.seq,rtpseq
-                    if rtpseq == -1:
-                       pass
-                    elif (rtpseq +1) != rtp.seq:
-                       print '!!!!!!!!!!  rtp cur seq:%d  pre seq:%d !!!!!!!!!!!!!!'%(rtp.seq, rtpseq)
+                    if NumBuffersReceived == 0:
+                        mHighestSeqNumber = rtp.seq
+                    NumBuffersReceived = NumBuffersReceived + 1
+                    seqNum = rtp.seq
+                    seq1 = seqNum | (mHighestSeqNumber & 0xffff0000)
+                    seq2 = seqNum | ((mHighestSeqNumber & 0xffff0000) + 0x10000)
+                    seq3 = seqNum | ((mHighestSeqNumber & 0xffff0000) - 0x10000)
+                            #return seq1 > seq2 ? seq1 - seq2 : seq2 - seq1;
+                    diff1 = (seq1 - mHighestSeqNumber) if (seq1 > mHighestSeqNumber) else (mHighestSeqNumber - seq1) #AbsDiff(seq1, mHighestSeqNumber)
+                    diff2 = (seq2 - mHighestSeqNumber) if (seq2 > mHighestSeqNumber) else (mHighestSeqNumber - seq2) #AbsDiff(seq2, mHighestSeqNumber)
+                    diff3 = (seq3 - mHighestSeqNumber) if (seq3 > mHighestSeqNumber) else (mHighestSeqNumber - seq3) #AbsDiff(seq3, mHighestSeqNumber)
 
+                    if diff1 < diff2 :
+                        if diff1 < diff3:
+                            #diff1 < diff2 ^ diff1 < diff3
+                            seqNum = seq1;
+                        else:
+                            #diff3 <= diff1 < diff2
+                            seqNum = seq3
+                    elif diff2 < diff3:
+                        #diff2 <= diff1 ^ diff2 < diff3
+                        seqNum = seq2
+                    else:
+                        #diff3 <= diff2 <= diff1
+                        seqNum = seq3
+                    
 
-                    rtpseq = rtp.seq
-                    #print 'rtpseq %d'%rtpseq
+                    if seqNum > mHighestSeqNumber:
+                        mHighestSeqNumber = seqNum
 
-                    try:
-                        assember.packetAssemble(rtp)
-                    except:
-                        continue
-              #print rtp.cc,rtp.m,rtp.p,rtp.pt,rtp.version,rtp.x
-              #print hex(rtp.ssrc), rtp.ts, len(rtp.data), binascii.b2a_hex(rtp.data[:2])
+                    udplist[seqNum] = udp
+
+                    #if rtpseq == -1:
+                    #   pass
+                    #elif (rtpseq +1) != rtp.seq:
+                    #   print '!!!!!!!!!!  rtp cur seq:%d  pre seq:%d !!!!!!!!!!!!!!'%(rtp.seq, rtpseq)
+                    #   continue
+                       
+                    if len(udplist) > 1000:
+                         _udplist = sorted(udplist.items(), key=lambda d:d[0])
+                         count = 0
+                         for _item in _udplist:
+                            if count >50:
+                               break
+                            count = count + 1
+                            rtp = dpkt.rtp.RTP(_item[1].data)
+                            if rtpseq == -1:
+                                pass
+                            elif (rtpseq +1) != rtp.seq:
+                                print '!!!!!!!!!!  rtp cur seq:%d  pre seq:%d !!!!!!!!!!!!!!'%(rtp.seq, rtpseq)
+
+                            rtpseq = rtp.seq
+                            #print 'key %d rtpseq %d'%(_item[0],rtpseq)
+                            rtp_ex_len = 0
+                            if rtp.x :
+                                rtp_ex_len = (((ord(rtp.data[2])<<8) + ord(rtp.data[3]) + 1)<<2)
+                              
+                            rtp.data = _item[1].data[rtp.__hdr_len__ + rtp.cc * 4 + rtp_ex_len:]
+                            try:
+                                assember.packetAssemble(rtp)
+                                pass
+                            except:
+                                continue
+
+                            del udplist[_item[0]]
+                  #print rtp.cc,rtp.m,rtp.p,rtp.pt,rtp.version,rtp.x
+                  #print hex(rtp.ssrc), rtp.ts, len(rtp.data), binascii.b2a_hex(rtp.data[:2])
 
 
               except dpkt.dpkt.NeedData:
                  continue
               except dpkt.dpkt.UnpackError:
                  continue   
-                
+    _udplist = sorted(udplist.items(), key=lambda d:d[0])
+    for _item in _udplist:
+        count = count + 1
+        rtp = dpkt.rtp.RTP(_item[1].data)
+        if rtpseq == -1:
+            pass
+        elif (rtpseq +1) != rtp.seq:
+            print '!!!!!!!!!! 2 rtp cur seq:%d  pre seq:%d !!!!!!!!!!!!!!'%(rtp.seq, rtpseq)
+
+        rtpseq = rtp.seq
+        #print 'key %d rtpseq %d'%(_item[0],rtpseq)
+        rtp_ex_len = 0
+        if rtp.x :
+            rtp_ex_len = (((ord(rtp.data[2])<<8) + ord(rtp.data[3]) + 1)<<2)
+          
+            rtp.data = _item[1].data[rtp.__hdr_len__ + rtp.cc * 4 + rtp_ex_len:]
+        try:
+            assember.packetAssemble(rtp)
+            pass
+        except:
+            continue
     inpcap.close()              
 
 if __name__=="__main__":
