@@ -1,0 +1,31 @@
+[user]
+	name = jphuang
+	email = jphuang@grandstream.cn
+[diff]
+    tool = bc3
+[difftool]
+    prompt = false
+[merge]
+	tool = kdiff3
+[mergetool]
+    prompt = false
+[alias]
+	diffall = diffall-org --copy-back
+	co = checkout
+	ls = log --oneline --author --graph --all --decorate
+        lg = log --date=short --oneline --graph --all --decorate --pretty=format:"%h%x20%Cgreen%d%x20%Cred%an%x20%C(yellow)%ad%x20%Creset%s" --full-history
+        last = log -1 HEAD
+        cp = cherry-pick
+    lsf = log --name-status
+       lsfl = log --name-status -1 HEAD
+    as = log --author=sshsun
+    difffile = diff --name-status
+[difftool "bcompare"]
+    cmd = bcompare "$LOCAL" "$REMOTE"
+[color]
+	ui = auto
+[commit]
+	template = /home/sshsun/gsconfig/CommitTemplate
+[core]
+	editor = vim
+

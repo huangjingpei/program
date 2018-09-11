@@ -1,0 +1,3 @@
+git diffall的使用
+1.把.gitconfig copy到~/
+2.把git-diff-org copy到/usr/bin
