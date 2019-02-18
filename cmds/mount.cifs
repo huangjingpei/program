@@ -1,0 +1,3 @@
+
+sudo mount -t cifs -o username=melot,password=517166,rw,nobrl,nounix,iocharset=utf8,file_mode=0777,dir_mode=0777 //10.0.17.67/cifs /home/ubuntu/cifs
+

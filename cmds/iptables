@@ -1,0 +1,2 @@
+
+sudo iptables -I OUTPUT -d 39.96.163.113 -m statistic --mode random --probability 0.5 -j DROP
