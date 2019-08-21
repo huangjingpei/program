@@ -1,0 +1,14 @@
+
+如何编译ffplay
+
+1.安装sdl2
+sudo apt-get install libsdl2-dev
+
+
+
+2.开启--enable-sdl
+./configure --enable-shared --enable-sdl --enable-gpl --enable-nonfree --disable-stripping --enable-zlib --enable-avresample --enable-decoder=png --enable-pic --disable-symver --extra-cflags="-fPIC"
+
+说明:
+--extra-cflags="-fPIC" 64位机器上启用动态库符号链接
+

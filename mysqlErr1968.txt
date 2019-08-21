@@ -1,0 +1,53 @@
+
+ubantu linux下安装新版mysql，登录时必须sudo mysql -u root -p,因为安装时root用户的密码是随机的，直接mysql -u root -p则无法登录，报错：
+
+ERROR 1698 (28000): Access denied for user 'root'@'localhost
+
+解决方案：
+
+步骤一：登录mysql
+
+sudo mysql -u root -p
+
+
+步骤二：查看user表：
+
+select user, plugin from mysql.user;
+
+结果如下：
+
+    mysql> select user, plugin from mysql.user;
+    +-----------+-----------------------+
+    | user      | plugin                |
+    +-----------+-----------------------+
+    | root      | auth_socket           |
+    | mysql.sys | mysql_native_password |
+    | dev       | mysql_native_password |
+    +-----------+-----------------------+
+    3 rows in set (0.01 sec)
+
+发现root的plugin并不是本地密码，因此需要修改它，但由于MySQL5.6.6版本之后增加了密码强度验证插件validate_password，相关参数设置的较为严格。如果修改的密码太过低级，则无法通过，报如下错误：
+
+ERROR 1819 (HY000): Your password does not satisfy the current policy requirements
+
+因此，如果要设置为简单密码，则需修改密码规则的配置，参考博客：https://blog.csdn.net/kuluzs/article/details/51924374
+
+
+步骤三：修改mysql参数配置：
+
+    set global validate_password_policy=0;
+    set global validate_password_mixed_case_count=0;
+    set global validate_password_number_count=3;
+    set global validate_password_special_char_count=0;
+    set global validate_password_length=3;
+
+
+步骤四：修改root密码
+
+update mysql.user set authentication_string=PASSWORD('123'), plugin='mysql_native_password' where user='root';
+
+步骤五：刷新
+
+flush privileges;
+
+最后重启终端，就可通过mysql -u root -p 免sudo登录mysql啦！
